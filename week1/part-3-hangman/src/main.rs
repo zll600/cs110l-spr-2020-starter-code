@@ -34,7 +34,59 @@ fn main() {
     // secret_word by doing secret_word_chars[i].
     let secret_word_chars: Vec<char> = secret_word.chars().collect();
     // Uncomment for debugging:
-    // println!("random word: {}", secret_word);
+    println!("random word: {}", secret_word);
+    // println!("{}", mem::size_of_val(&secret_word_chars));
 
+    let mut guessed_letters: Vec<char> = Vec::new();
+    let mut word_so_far: Vec<char> = String::from("----------------")[0..secret_word_chars.len()]
+        .chars()
+        .collect();
     // Your code here! :)
+    let mut match_letters_cnt = 0;
+    let mut already_try: u32 = 0;
+    loop {
+        if already_try == NUM_INCORRECT_GUESSES {
+            println!("Sorry, you ran out of guesses!");
+            break;
+        }
+
+        println!("The word so far is {:?}", word_so_far);
+        println!(
+            "You have guessed the following letters: {:?}",
+            guessed_letters
+        );
+        print!(
+            "You have {} guesses left\n",
+            secret_word_chars.len() - match_letters_cnt
+        );
+        print!("Please guess a letter: ");
+        // Make sure the prompt from the previous line gets displayed;
+        io::stdout().flush().expect("Error flushing stdout.");
+        let mut guess = String::new();
+        io::stdin()
+            .read_line(&mut guess)
+            .expect("Error reading line.");
+        let guess_letters: Vec<char> = guess.chars().collect();
+        guessed_letters.push(guess_letters[0]);
+
+        let mut flag: bool = false;
+        for idx in 0..secret_word_chars.len() {
+            if guess_letters[0] == secret_word_chars[idx] && word_so_far[idx] == '-' {
+                match_letters_cnt += 1;
+                word_so_far[idx] = guess_letters[0];
+                flag = true;
+                break;
+            }
+        }
+        if !flag {
+            println!("Sorry, that letter is not in the word");
+        }
+        println!("\n");
+
+        if match_letters_cnt == secret_word_chars.len() {
+            println!("Congratulations you guessed the secret word: {secret_word}!");
+            break;
+        }
+        already_try += 1;
+    }
 }
