@@ -43,6 +43,7 @@ impl Inferior {
         }
         let child = cmd.spawn().expect("Error in Inferiro::new");
         let inferior = Inferior { child };
+        /*
         match inferior.wait(None).ok()? {
             Status::Exited(exit_code) => println!("Child exited (status {})", exit_code),
             Status::Signaled(signal) => println!("Child exited due to {}", signal),
@@ -50,8 +51,8 @@ impl Inferior {
                 println!("Child stopped by signal {} at address {:#x}", signal, rip)
             }
         }
-        // Some(inferior)
-        None
+        */
+        Some(inferior)
     }
 
     /// Returns the pid of this inferior.
@@ -73,11 +74,8 @@ impl Inferior {
         })
     }
 
-    /*
     pub fn continue_run(&self, sig: Option<signal::Signal>) -> Result<Status, nix::Error> {
-        ptrace::cont(sig)?;
-        self.wait()?;
-
+        ptrace::cont(self.pid(), sig)?;
+        Ok(self.wait(None)?)
     }
-    */
 }
