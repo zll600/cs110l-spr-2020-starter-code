@@ -78,4 +78,10 @@ impl Inferior {
         ptrace::cont(self.pid(), sig)?;
         Ok(self.wait(None)?)
     }
+
+    pub fn kill(&mut self) {
+        self.child.kill().unwrap();
+        self.wait(None).unwrap();
+        println!("Killing running inferior (pid: {})", self.pid());
+    }
 }

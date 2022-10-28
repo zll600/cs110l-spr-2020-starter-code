@@ -32,6 +32,10 @@ impl Debugger {
         loop {
             match self.get_next_command() {
                 DebuggerCommand::Run(args) => {
+                    if self.inferior.is_some() {
+                        self.inferior.as_mut().unwrap().kill();
+                        self.inferior = None;
+                    }
                     if let Some(inferior) = Inferior::new(&self.target, &args) {
                         // Create the inferior
                         self.inferior = Some(inferior);
@@ -52,7 +56,24 @@ impl Debugger {
                     }
                 }
                 DebuggerCommand::Quit => {
+                    self.inferior.as_mut().unwrap().kill();
+                    self.inferior = None;
                     return;
+                }
+                DebuggerCommand::Continue => {
+                    if self.inferior.is_none() {
+                        println!("There is not one running!");
+                        continue;
+                    }
+                    match self.inferior.as_mut().unwrap().continue_run(None).unwrap() {
+                        Status::Exited(exit_code) => {
+                            println!("Child exited (status {})", exit_code)
+                        }
+                        Status::Signaled(signal) => println!("Child exited due to {}", signal),
+                        Status::Stopped(signal, rip) => {
+                            println!("Child stopped by signal {} at address {:#x}", signal, rip)
+                        }
+                    }
                 }
             }
         }
