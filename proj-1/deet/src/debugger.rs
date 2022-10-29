@@ -1,5 +1,7 @@
 use crate::debugger_command::DebuggerCommand;
+use crate::dwarf_data::{DwarfData, Error as DwarfError};
 use crate::inferior::{Inferior, Status};
+use nix::sys::ptrace;
 use rustyline::error::ReadlineError;
 use rustyline::Editor;
 
@@ -8,6 +10,7 @@ pub struct Debugger {
     history_path: String,
     readline: Editor<()>,
     inferior: Option<Inferior>,
+    debug_data: DwarfData,
 }
 
 impl Debugger {
@@ -20,11 +23,24 @@ impl Debugger {
         // Attempt to load history from ~/.deet_history if it exists
         let _ = readline.load_history(&history_path);
 
+        let debug_data = match DwarfData::from_file(target) {
+            Ok(val) => val,
+            Err(DwarfError::ErrorOpeningFile) => {
+                println!("Could not open file {}", target);
+                std::process::exit(1);
+            }
+            Err(DwarfError::DwarfFormatError(err)) => {
+                println!("Couldn't not debugging symbols from {}: {:?}", target, err);
+                std::process::exit(1);
+            }
+        };
+
         Debugger {
             target: target.to_string(),
             history_path,
             readline,
             inferior: None,
+            debug_data,
         }
     }
 
@@ -48,7 +64,19 @@ impl Debugger {
                             }
                             Status::Signaled(signal) => println!("Child exited due to {}", signal),
                             Status::Stopped(signal, rip) => {
-                                println!("Child stopped by signal {} at address {:#x}", signal, rip)
+                                println!(
+                                    "Child stopped by signal {} at address {:#x}",
+                                    signal, rip
+                                );
+                                let regs = ptrace::getregs(
+                                    self.inferior.as_ref().expect("No inferior").pid(),
+                                )
+                                .expect("Fail to obtain file name and line number");
+                                let rip = regs.rip as usize;
+                                // let rbp = regs.rbp as usize;
+
+                                let dwarf_line = self.debug_data.get_line_from_addr(rip).unwrap();
+                                println!("Stopped at ({})", dwarf_line);
                             }
                         }
                     } else {
@@ -67,13 +95,25 @@ impl Debugger {
                     }
                     match self.inferior.as_mut().unwrap().continue_run(None).unwrap() {
                         Status::Exited(exit_code) => {
-                            println!("Child exited (status {})", exit_code)
+                            println!("Child exited (status {})", exit_code);
+                            self.inferior = None;
                         }
-                        Status::Signaled(signal) => println!("Child exited due to {}", signal),
+                        Status::Signaled(signal) => {
+                            println!("Child exited due to {}", signal);
+                            self.inferior = None;
+                        }
                         Status::Stopped(signal, rip) => {
                             println!("Child stopped by signal {} at address {:#x}", signal, rip)
                         }
                     }
+                }
+                DebuggerCommand::Backtrace => {
+                    self.inferior
+                        .as_mut()
+                        .unwrap()
+                        .print_backtrace(&self.debug_data)
+                        .unwrap();
+                    // return;
                 }
             }
         }
