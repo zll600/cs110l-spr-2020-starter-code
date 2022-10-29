@@ -87,7 +87,6 @@ impl DwarfData {
         }
     }
 
-    #[allow(dead_code)]
     pub fn get_line_from_addr(&self, curr_addr: usize) -> Option<Line> {
         let location = self
             .addr2line
@@ -100,7 +99,6 @@ impl DwarfData {
         })
     }
 
-    #[allow(dead_code)]
     pub fn get_function_from_addr(&self, curr_addr: usize) -> Option<String> {
         let frame = self
             .addr2line
@@ -222,5 +220,3 @@ impl fmt::Display for Line {
         write!(f, "{}:{}", self.file, self.number)
     }
 }
-
-

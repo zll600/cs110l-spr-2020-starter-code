@@ -1,7 +1,6 @@
 use crate::debugger_command::DebuggerCommand;
 use crate::dwarf_data::{DwarfData, Error as DwarfError};
 use crate::inferior::{Inferior, Status};
-use nix::sys::ptrace;
 use rustyline::error::ReadlineError;
 use rustyline::Editor;
 
@@ -68,13 +67,6 @@ impl Debugger {
                                     "Child stopped by signal {} at address {:#x}",
                                     signal, rip
                                 );
-                                let regs = ptrace::getregs(
-                                    self.inferior.as_ref().expect("No inferior").pid(),
-                                )
-                                .expect("Fail to obtain file name and line number");
-                                let rip = regs.rip as usize;
-                                // let rbp = regs.rbp as usize;
-
                                 let dwarf_line = self.debug_data.get_line_from_addr(rip).unwrap();
                                 println!("Stopped at ({})", dwarf_line);
                             }
@@ -84,8 +76,10 @@ impl Debugger {
                     }
                 }
                 DebuggerCommand::Quit => {
-                    self.inferior.as_mut().unwrap().kill();
-                    self.inferior = None;
+                    if self.inferior.is_some() {
+                        self.inferior.as_mut().unwrap().kill();
+                        self.inferior = None;
+                    }
                     return;
                 }
                 DebuggerCommand::Continue => {
@@ -108,12 +102,15 @@ impl Debugger {
                     }
                 }
                 DebuggerCommand::Backtrace => {
-                    self.inferior
-                        .as_mut()
-                        .unwrap()
-                        .print_backtrace(&self.debug_data)
-                        .unwrap();
-                    // return;
+                    if self.inferior.is_some() {
+                        self.inferior
+                            .as_mut()
+                            .unwrap()
+                            .print_backtrace(&self.debug_data)
+                            .unwrap();
+                    } else {
+                        println!("Error No process is running, you can use backtrace command!");
+                    }
                 }
             }
         }

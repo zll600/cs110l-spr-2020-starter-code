@@ -93,11 +93,26 @@ impl Inferior {
         let mut rbp = regs.rbp as usize;
 
         loop {
-            let dwarf_line = debug_data.get_line_from_addr(rip).unwrap();
-            let dwarf_func = debug_data.get_function_from_addr(rip).unwrap();
-            println!("{} ({})", dwarf_func, dwarf_line);
-            if dwarf_func == "main" {
-                break;
+            let dwarf_line = debug_data.get_line_from_addr(rip);
+            let dwarf_func = debug_data.get_function_from_addr(rip);
+            match (&dwarf_line, &dwarf_func) {
+                (None, None) => {
+                    println!("Unknown function name (Cannot find source file)");
+                }
+                (Some(line), None) => {
+                    println!("Unknown function name ({})", line);
+                }
+                (None, Some(func)) => {
+                    println!("{} (Cannot find source file)", func);
+                }
+                (Some(line), Some(func)) => {
+                    println!("{} ({})", func, line);
+                }
+            }
+            if let Some(func) = dwarf_func {
+                if func == "main" {
+                    break;
+                }
             }
 
             rip = ptrace::read(self.pid(), (rbp + 8) as ptrace::AddressType)? as usize;
