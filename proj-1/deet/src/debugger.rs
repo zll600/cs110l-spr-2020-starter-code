@@ -10,6 +10,7 @@ pub struct Debugger {
     readline: Editor<()>,
     inferior: Option<Inferior>,
     debug_data: DwarfData,
+    breakpoints: Vec<usize>,
 }
 
 impl Debugger {
@@ -33,13 +34,16 @@ impl Debugger {
                 std::process::exit(1);
             }
         };
+        debug_data.print();
 
+        let breakpoints: Vec<usize> = Vec::new();
         Debugger {
             target: target.to_string(),
             history_path,
             readline,
             inferior: None,
             debug_data,
+            breakpoints,
         }
     }
 
@@ -51,7 +55,7 @@ impl Debugger {
                         self.inferior.as_mut().unwrap().kill();
                         self.inferior = None;
                     }
-                    if let Some(inferior) = Inferior::new(&self.target, &args) {
+                    if let Some(inferior) = Inferior::new(&self.target, &args, &self.breakpoints) {
                         // Create the inferior
                         self.inferior = Some(inferior);
                         // TODO (milestone 1): make the inferior run
@@ -109,7 +113,31 @@ impl Debugger {
                             .print_backtrace(&self.debug_data)
                             .unwrap();
                     } else {
-                        println!("Error No process is running, you can use backtrace command!");
+                        println!("Error No process is running, you can not use backtrace command!");
+                    }
+                }
+                DebuggerCommand::BreakPoint(address) => {
+                    if !address.starts_with("*") {
+                        println!("Usage: breakpoint *address!");
+                        return;
+                    }
+                    if let Some(addr) = Self::parse_address(&address[1..]) {
+                        if self.inferior.is_some() {
+                            if self
+                                .inferior
+                                .as_mut()
+                                .unwrap()
+                                .write_byte(addr, 0xcc)
+                                .ok()
+                                .is_none()
+                            {
+                                return;
+                            }
+                        }
+                        println!("Set breakpoint {} at {}", self.breakpoints.len(), address);
+                        self.breakpoints.push(addr);
+                    } else {
+                        println!("Invalid address");
                     }
                 }
             }
@@ -155,5 +183,14 @@ impl Debugger {
                 }
             }
         }
+    }
+
+    fn parse_address(addr: &str) -> Option<usize> {
+        let addr_without_0x = if addr.to_lowercase().starts_with("0x") {
+            &addr[2..]
+        } else {
+            &addr
+        };
+        usize::from_str_radix(addr_without_0x, 16).ok()
     }
 }

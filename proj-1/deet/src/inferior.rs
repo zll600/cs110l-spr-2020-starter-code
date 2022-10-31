@@ -3,6 +3,7 @@ use nix::sys::ptrace;
 use nix::sys::signal;
 use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
 use nix::unistd::Pid;
+use std::mem::size_of;
 use std::os::unix::process::CommandExt;
 use std::process::{Child, Command};
 
@@ -35,7 +36,7 @@ pub struct Inferior {
 impl Inferior {
     /// Attempts to start a new inferior process. Returns Some(Inferior) if successful, or None if
     /// an error is encountered.
-    pub fn new(target: &str, args: &Vec<String>) -> Option<Inferior> {
+    pub fn new(target: &str, args: &Vec<String>, breakpoints: &Vec<usize>) -> Option<Inferior> {
         // TODO: implement me!
         let mut cmd = Command::new(target);
         cmd.args(args);
@@ -43,7 +44,7 @@ impl Inferior {
             cmd.pre_exec(child_traceme);
         }
         let child = cmd.spawn().expect("Error in Inferiro::new");
-        let inferior = Inferior { child };
+        let mut inferior = Inferior { child };
         /*
         match inferior.wait(None).ok()? {
             Status::Exited(exit_code) => println!("Child exited (status {})", exit_code),
@@ -53,6 +54,12 @@ impl Inferior {
             }
         }
         */
+        for bp in breakpoints {
+            match inferior.write_byte(*bp, 0xcc) {
+                Ok(_) => continue,
+                Err(_) => println!("Error address is invalid!"),
+            }
+        }
         Some(inferior)
     }
 
@@ -120,4 +127,23 @@ impl Inferior {
         }
         Ok(())
     }
+
+    pub fn write_byte(&mut self, addr: usize, val: u8) -> Result<u8, nix::Error> {
+        let aligned_addr = align_addr_to_word(addr);
+        let byte_offset = addr - aligned_addr;
+        let word = ptrace::read(self.pid(), aligned_addr as ptrace::AddressType)? as u64;
+        let orig_byte = (word >> 8 * byte_offset) & 0xff;
+        let masked_word = word & !(0xff << 8 * byte_offset);
+        let updated_word = masked_word | ((val as u64) << 8 * byte_offset);
+        ptrace::write(
+            self.pid(),
+            aligned_addr as ptrace::AddressType,
+            updated_word as *mut std::ffi::c_void,
+        )?;
+        Ok(orig_byte as u8)
+    }
+}
+
+fn align_addr_to_word(addr: usize) -> usize {
+    addr & (-(size_of::<usize>() as isize) as usize)
 }
