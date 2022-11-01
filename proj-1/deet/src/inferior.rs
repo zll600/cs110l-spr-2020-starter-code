@@ -3,6 +3,7 @@ use nix::sys::ptrace;
 use nix::sys::signal;
 use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
 use nix::unistd::Pid;
+use std::collections::HashMap;
 use std::mem::size_of;
 use std::os::unix::process::CommandExt;
 use std::process::{Child, Command};
@@ -29,6 +30,12 @@ fn child_traceme() -> Result<(), std::io::Error> {
     )))
 }
 
+#[derive(Clone)]
+pub struct Breakpoint {
+    pub addr: usize,
+    pub orig_byte: u8,
+}
+
 pub struct Inferior {
     child: Child,
 }
@@ -36,7 +43,11 @@ pub struct Inferior {
 impl Inferior {
     /// Attempts to start a new inferior process. Returns Some(Inferior) if successful, or None if
     /// an error is encountered.
-    pub fn new(target: &str, args: &Vec<String>, breakpoints: &Vec<usize>) -> Option<Inferior> {
+    pub fn new(
+        target: &str,
+        args: &Vec<String>,
+        breakpoints: &mut HashMap<usize, Breakpoint>,
+    ) -> Option<Inferior> {
         // TODO: implement me!
         let mut cmd = Command::new(target);
         cmd.args(args);
@@ -54,10 +65,21 @@ impl Inferior {
             }
         }
         */
-        for bp in breakpoints {
+        let breakpoints_clone = breakpoints.clone();
+        for bp in breakpoints_clone.keys() {
             match inferior.write_byte(*bp, 0xcc) {
-                Ok(_) => continue,
-                Err(_) => println!("Error address is invalid!"),
+                Ok(orig_byte) => {
+                    breakpoints
+                        .insert(
+                            *bp,
+                            Breakpoint {
+                                addr: *bp,
+                                orig_byte,
+                            },
+                        )
+                        .unwrap();
+                }
+                Err(_) => println!("Error address is invalid: {:#x}", *bp),
             }
         }
         Some(inferior)
@@ -82,9 +104,35 @@ impl Inferior {
         })
     }
 
-    pub fn continue_run(&self, sig: Option<signal::Signal>) -> Result<Status, nix::Error> {
+    pub fn continue_run(
+        &mut self,
+        sig: Option<signal::Signal>,
+        breakpoints: &HashMap<usize, Breakpoint>,
+    ) -> Result<Status, nix::Error> {
+        let mut regs = ptrace::getregs(self.pid())?;
+        let rip = regs.rip as usize;
+
+        // if inferior is stopped at a breakpoint(i.e. (%rip - 1) matches a breakpoint address.)
+        if let Some(breakpoint) = breakpoints.get(&(rip - 1)) {
+            println!("Stop at a breakpoint!");
+            // restore the first byte of the instruction we replaced
+            self.write_byte(rip - 1, breakpoint.orig_byte).unwrap();
+            // set %rip = %rip - 1 to rewind the instruction pointer
+            regs.rip = (rip - 1) as u64;
+            ptrace::setregs(self.pid(), regs)?;
+            // ptrace::stop to go to next breakpoint
+            ptrace::step(self.pid(), None)?;
+            // wait for inferior to stop due to SIGTRAP
+            match self.wait(None).ok().unwrap() {
+                Status::Exited(exit_code) => return Ok(Status::Exited(exit_code)),
+                Status::Signaled(signal) => return Ok(Status::Signaled(signal)),
+                Status::Stopped(_, _) => self.write_byte(rip - 1, 0xcc).unwrap(),
+            };
+        }
+        // ptrace::cont to resume normal executation
         ptrace::cont(self.pid(), sig)?;
-        Ok(self.wait(None)?)
+        // wait for inferior to stop or terminate
+        self.wait(None)
     }
 
     pub fn kill(&mut self) {

@@ -1,8 +1,9 @@
 use crate::debugger_command::DebuggerCommand;
 use crate::dwarf_data::{DwarfData, Error as DwarfError};
-use crate::inferior::{Inferior, Status};
+use crate::inferior::{Breakpoint, Inferior, Status};
 use rustyline::error::ReadlineError;
 use rustyline::Editor;
+use std::collections::HashMap;
 
 pub struct Debugger {
     target: String,
@@ -10,7 +11,8 @@ pub struct Debugger {
     readline: Editor<()>,
     inferior: Option<Inferior>,
     debug_data: DwarfData,
-    breakpoints: Vec<usize>,
+    // breakpoints: Vec<usize>,
+    breakpoints: HashMap<usize, Breakpoint>,
 }
 
 impl Debugger {
@@ -36,7 +38,7 @@ impl Debugger {
         };
         debug_data.print();
 
-        let breakpoints: Vec<usize> = Vec::new();
+        let breakpoints: HashMap<usize, Breakpoint> = HashMap::new();
         Debugger {
             target: target.to_string(),
             history_path,
@@ -55,13 +57,21 @@ impl Debugger {
                         self.inferior.as_mut().unwrap().kill();
                         self.inferior = None;
                     }
-                    if let Some(inferior) = Inferior::new(&self.target, &args, &self.breakpoints) {
+                    if let Some(inferior) =
+                        Inferior::new(&self.target, &args, &mut self.breakpoints)
+                    {
                         // Create the inferior
                         self.inferior = Some(inferior);
                         // TODO (milestone 1): make the inferior run
                         // You may use self.inferior.as_mut().unwrap() to get a mutable reference
                         // to the Inferior object
-                        match self.inferior.as_mut().unwrap().continue_run(None).unwrap() {
+                        match self
+                            .inferior
+                            .as_mut()
+                            .unwrap()
+                            .continue_run(None, &self.breakpoints)
+                            .unwrap()
+                        {
                             Status::Exited(exit_code) => {
                                 println!("Child exited (status {})", exit_code)
                             }
@@ -91,7 +101,13 @@ impl Debugger {
                         println!("There is not one running!");
                         continue;
                     }
-                    match self.inferior.as_mut().unwrap().continue_run(None).unwrap() {
+                    match self
+                        .inferior
+                        .as_mut()
+                        .unwrap()
+                        .continue_run(None, &self.breakpoints)
+                        .unwrap()
+                    {
                         Status::Exited(exit_code) => {
                             println!("Child exited (status {})", exit_code);
                             self.inferior = None;
@@ -119,25 +135,36 @@ impl Debugger {
                 DebuggerCommand::BreakPoint(address) => {
                     if !address.starts_with("*") {
                         println!("Usage: breakpoint *address!");
-                        return;
+                        continue;
                     }
                     if let Some(addr) = Self::parse_address(&address[1..]) {
                         if self.inferior.is_some() {
-                            if self
-                                .inferior
-                                .as_mut()
-                                .unwrap()
-                                .write_byte(addr, 0xcc)
-                                .ok()
-                                .is_none()
+                            if let Ok(orig_byte) =
+                                self.inferior.as_mut().unwrap().write_byte(addr, 0xcc)
                             {
-                                return;
+                                println!(
+                                    "Set breakpoint {} at {}",
+                                    self.breakpoints.len(),
+                                    address
+                                );
+                                self.breakpoints
+                                    .insert(addr, Breakpoint { addr, orig_byte });
+                            } else {
+                                println!(
+                                    "Error in Setting breakpoint at invalid address {:#x}",
+                                    addr
+                                );
                             }
+                        } else {
+                            println!("Set breakpoint {} at {}", self.breakpoints.len(), address);
+                            self.breakpoints
+                                .insert(addr, Breakpoint { addr, orig_byte: 0 });
                         }
-                        println!("Set breakpoint {} at {}", self.breakpoints.len(), address);
-                        self.breakpoints.push(addr);
                     } else {
-                        println!("Invalid address");
+                        println!(
+                            "Error in Setting breakpoint at invalid address: {}",
+                            address
+                        );
                     }
                 }
             }
