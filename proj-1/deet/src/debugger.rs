@@ -137,7 +137,7 @@ impl Debugger {
                         println!("Usage: breakpoint *address!");
                         continue;
                     }
-                    if let Some(addr) = Self::parse_address(&address[1..]) {
+                    if let Some(addr) = self.parse_address(&address[1..]) {
                         if self.inferior.is_some() {
                             if let Ok(orig_byte) =
                                 self.inferior.as_mut().unwrap().write_byte(addr, 0xcc)
@@ -212,12 +212,21 @@ impl Debugger {
         }
     }
 
-    fn parse_address(addr: &str) -> Option<usize> {
-        let addr_without_0x = if addr.to_lowercase().starts_with("0x") {
-            &addr[2..]
+    fn parse_address(&self, addr: &str) -> Option<usize> {
+        // let addr_without_0x = if addr.to_lowercase().starts_with("0x") {
+        //     &addr[2..]
+        // } else {
+        //     &addr
+        // };
+        // usize::from_str_radix(addr_without_0x, 16).ok()
+        if addr.to_lowercase().starts_with("0x") {
+            usize::from_str_radix(&addr[2..], 16).ok()
+        } else if let Ok(line) = addr.parse::<usize>() {
+            self.debug_data.get_addr_for_line(None, line)
+        } else if let Some(address) = self.debug_data.get_addr_for_function(None, addr) {
+            Some(address)
         } else {
-            &addr
-        };
-        usize::from_str_radix(addr_without_0x, 16).ok()
+            usize::from_str_radix(&addr, 16).ok()
+        }
     }
 }
