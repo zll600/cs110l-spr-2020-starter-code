@@ -7,6 +7,7 @@ use std::sync::Arc;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::stream::StreamExt;
 use tokio::sync::Mutex;
+use tokio::time::{delay_for, Duration};
 
 /// Contains information parsed from the command-line invocation of balancebeam. The Clap macros
 /// provide a fancy way to automatically construct a command-line argument parser.
@@ -58,7 +59,6 @@ struct ProxyState {
     max_requests_per_minute: usize,
     /// Addresses of servers that we are proxying to
     upstream_addresses: Vec<String>,
-
     /// Health Status of servers that we are proxying to_string
     upstream_status: Mutex<Vec<bool>>,
 }
@@ -101,6 +101,11 @@ async fn main() {
     };
 
     let shared_state = Arc::new(state);
+
+    let shared_state_clone = shared_state.clone();
+    tokio::spawn(async move {
+        active_health_check(shared_state_clone).await;
+    });
     let mut incoming = listener.incoming();
     while let Some(stream) = incoming.next().await {
         match stream {
@@ -252,5 +257,67 @@ async fn handle_connection(mut client_conn: TcpStream, state: Arc<ProxyState>) {
         // Forward the response to the client
         send_response(&mut client_conn, &response).await;
         log::debug!("Forwarded response to client");
+    }
+}
+
+async fn check_server(upstream_idx: usize, state: &Arc<ProxyState>) -> bool {
+    let upstream_ip = &state.upstream_addresses[upstream_idx];
+    let request = http::Request::builder()
+        .method(http::Method::GET)
+        .uri(&state.active_health_check_path)
+        .header("Host", upstream_ip)
+        .body(Vec::new())
+        .unwrap();
+
+    let mut upstream_conn = match connect_to_specify_server(upstream_ip).await {
+        Ok(stream) => stream,
+        Err(_error) => {
+            return false;
+        }
+    };
+    if let Err(error) = request::write_to_stream(&request, &mut upstream_conn).await {
+        log::debug!(
+            "Failed to send request to upsteram {}: {}",
+            upstream_ip,
+            error
+        );
+        return false;
+    }
+    match response::read_from_stream(&mut upstream_conn, request.method()).await {
+        Ok(resp) if resp.status() == http::StatusCode::OK => return true,
+        Ok(_resp) => {
+            log::info!("Error the server is not healthy");
+            return false;
+        }
+        Err(error) => {
+            log::info!("Error reading response from server: {:?}", error);
+            return false;
+        }
+    }
+}
+
+async fn active_health_check(state: Arc<ProxyState>) {
+    let internal = state.active_health_check_interval as u64;
+    loop {
+        delay_for(Duration::from_secs(internal)).await;
+        let mut upstream_status = state.upstream_status.lock().await;
+        for upstream_idx in 0..upstream_status.len() {
+            if check_server(upstream_idx, &state).await {
+                upstream_status[upstream_idx] = true;
+            } else {
+                upstream_status[upstream_idx] = false;
+            }
+        }
+    }
+}
+
+// connect to the specified server
+async fn connect_to_specify_server(upstream_ip: &str) -> Result<TcpStream, std::io::Error> {
+    match TcpStream::connect(upstream_ip).await {
+        Ok(upstream) => return Ok(upstream),
+        Err(err) => {
+            log::info!("Failed to connect to upstream {}: {}", upstream_ip, err);
+            return Err(err);
+        }
     }
 }
