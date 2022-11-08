@@ -3,6 +3,7 @@ mod response;
 
 use clap::Clap;
 use rand::{Rng, SeedableRng};
+use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::stream::StreamExt;
@@ -61,6 +62,8 @@ struct ProxyState {
     upstream_addresses: Vec<String>,
     /// Health Status of servers that we are proxying to_string
     upstream_status: Mutex<Vec<bool>>,
+    /// Request counter per ip_addr
+    rate_limit_counter: Mutex<HashMap<String, usize>>,
 }
 
 #[tokio::main]
@@ -98,6 +101,7 @@ async fn main() {
         active_health_check_path: options.active_health_check_path,
         max_requests_per_minute: options.max_requests_per_minute,
         upstream_status: Mutex::new(vec![true; upstream_num]),
+        rate_limit_counter: Mutex::new(HashMap::new()),
     };
 
     let shared_state = Arc::new(state);
@@ -106,6 +110,13 @@ async fn main() {
     tokio::spawn(async move {
         active_health_check(shared_state_clone).await;
     });
+
+    if shared_state.max_requests_per_minute > 0 {
+        let shared_state_clone = shared_state.clone();
+        tokio::spawn(async move {
+            refresh_rate_limit_counter(shared_state_clone).await;
+        });
+    }
     let mut incoming = listener.incoming();
     while let Some(stream) = incoming.next().await {
         match stream {
@@ -174,6 +185,9 @@ async fn send_response(client_conn: &mut TcpStream, response: &http::Response<Ve
 }
 
 async fn handle_connection(mut client_conn: TcpStream, state: Arc<ProxyState>) {
+    if !check_rate_limit_counter(&mut client_conn, &state).await {
+        return;
+    }
     let client_ip = client_conn.peer_addr().unwrap().ip().to_string();
     log::info!("Connection received from {}", client_ip);
 
@@ -320,4 +334,28 @@ async fn connect_to_specify_server(upstream_ip: &str) -> Result<TcpStream, std::
             return Err(err);
         }
     }
+}
+
+// Refreash rate limit counter
+async fn refresh_rate_limit_counter(state: Arc<ProxyState>) {
+    delay_for(Duration::from_secs(
+        state.active_health_check_interval as u64,
+    ))
+    .await;
+    let mut rate_limit_counter = state.rate_limit_counter.lock().await;
+    rate_limit_counter.clear();
+}
+
+async fn check_rate_limit_counter(client_conn: &mut TcpStream, state: &Arc<ProxyState>) -> bool {
+    let ip_addr = client_conn.peer_addr().unwrap().ip().to_string();
+    let mut rate_limit_counter = state.rate_limit_counter.lock().await;
+    let count = rate_limit_counter.entry(ip_addr.to_string()).or_insert(0);
+    *count += 1;
+    log::info!("{} requests from ip: {}", count, ip_addr);
+    if *count > state.max_requests_per_minute {
+        let response = response::make_http_error(http::StatusCode::TOO_MANY_REQUESTS);
+        send_response(client_conn, &response).await;
+        return false;
+    }
+    return true;
 }
